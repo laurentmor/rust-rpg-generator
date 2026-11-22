@@ -1,0 +1,92 @@
+name: Certify and publish candidate
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Optional prerelease version; empty = 1.0.0-rc2-run<run_number>'
+        required: false
+        type: string
+  release:
+    types: [published]
+permissions:
+  contents: write
+concurrency:
+  group: rust-rpg-publish-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  certify:
+    # Do not re-run on candidate releases produced by this workflow.
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, '1.0.0-rc2-run')
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout generator
+        uses: actions/checkout@v4
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Show toolchain versions
+        run: |
+          python --version
+          cargo --version
+          rustc --version
+          git --version
+      - name: Choose release version
+        id: vars
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if ($env:EVENT_NAME -eq 'release') {
+            $version = $env:RELEASE_TAG -replace '^v', ''
+          } elseif ($env:INPUT_VERSION) {
+            $version = $env:INPUT_VERSION
+          } else {
+            $version = "1.0.0-rc2-run${{ github.run_number }}"
+          }
+          if ($version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$') { throw "Invalid version: $version" }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=v$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version selected: $version"
+      - name: Full certification and package (verbose)
+        run: .\release.ps1 -Version '${{ steps.vars.outputs.version }}' -Heartbeat 5
+      - name: Verify release files
+        run: |
+          $version = '${{ steps.vars.outputs.version }}'
+          foreach ($name in @('release-report.json', 'release-check.log', "rust-rpg-kit-v$version.zip", "rust-rpg-v$version-manifest.json")) {
+            $path = Join-Path dist $name
+            if (-not (Test-Path $path)) { throw "Missing artifact: $path" }
+            Write-Host "Verified: $path"
+          }
+      - name: Upload certification artifacts (including failure logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: certification-${{ github.run_id }}
+          path: |
+            dist/release-report.json
+            dist/release-check.log
+            dist/*.zip
+            dist/*manifest.json
+          if-no-files-found: warn
+      - name: Publish candidate on manual run
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          gh release create "$env:TAG" "dist/rust-rpg-kit-v$env:VERSION.zip" "dist/rust-rpg-v$env:VERSION-manifest.json" "dist/release-report.json" "dist/release-check.log" --target "${{ github.sha }}" --title "Rust RPG $env:VERSION" --notes "Automated Windows certification: 120 levels, 360 Cargo checks. Manual FR/EN smoke tests pending." --prerelease
+      - name: Attach certified files to release-please release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.vars.outputs.tag }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          gh release upload "$env:TAG" "dist/rust-rpg-kit-v$env:VERSION.zip" "dist/rust-rpg-v$env:VERSION-manifest.json" "dist/release-report.json" "dist/release-check.log" --clobber
