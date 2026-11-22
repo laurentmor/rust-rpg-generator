@@ -15,6 +15,15 @@ from pathlib import Path
 
 from audit import audit
 
+
+# Force UTF-8 output for Python scripts, even on Windows.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(
+            encoding="utf-8",
+            errors="replace"
+        )
+
 HERE = Path(__file__).resolve().parent
 
 

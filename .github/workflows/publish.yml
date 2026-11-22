@@ -1,4 +1,13 @@
 name: Certify and publish candidate
+#variables:
+env:
+  # Force UTF-8 output for Python scripts, even on Windows.
+  PYTHONUTF8: "1"
+  # Force utf-8 encoding for Python scripts, even on Windows.
+  PYTHONIOENCODING: "utf-8"
+  # Force unbuffered output for Python scripts, even on Windows.
+  PYTHONUNBUFFERED: "1"
+
 on:
   workflow_dispatch:
     inputs:
